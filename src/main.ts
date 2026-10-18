@@ -12,6 +12,7 @@ import {
   URLENCODED_BODY_LIMIT,
 } from './common/request-limits';
 import { requestSizeErrorHandler } from './common/request-size-error-handler';
+import { apiVersionMiddleware } from './common/api-version.middleware';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
@@ -27,6 +28,7 @@ async function bootstrap() {
   });
 
   app.use(helmet());
+  app.use(apiVersionMiddleware);
   app.useGlobalFilters(new HttpExceptionFilter());
 
   app.use(
@@ -60,6 +62,7 @@ async function bootstrap() {
       'https://ikash.it.com',
     ],
     credentials: true,
+    exposedHeaders: ['X-API-Version', 'Deprecation', 'Sunset', 'Link'],
   });
 
   // Configure proxy trust for rate-limiting client IP extraction
