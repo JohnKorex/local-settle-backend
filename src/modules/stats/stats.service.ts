@@ -4,9 +4,40 @@ import { StatsQueryDto } from './dto/stats-query.dto';
 
 @Injectable()
 export class StatsService {
+  private readonly cache = new Map<
+    string,
+    { expiresAt: number; value: Awaited<ReturnType<StatsService['buildStats']>> }
+  >();
+  private static readonly CACHE_TTL_MS = 30_000;
+  private static readonly MAX_CACHE_ENTRIES = 20;
+  private static readonly MIN_PUBLIC_COHORT = 5;
+
   constructor(private readonly prisma: PrismaService) {}
 
   async getStats(query: StatsQueryDto) {
+    const window = query.window || '7d';
+    const cached = this.cache.get(window);
+    if (cached && cached.expiresAt > Date.now()) return cached.value;
+    if (cached) this.cache.delete(window);
+
+    const value = await this.buildStats(query);
+    if (this.cache.size >= StatsService.MAX_CACHE_ENTRIES) {
+      const oldestKey = this.cache.keys().next().value;
+      if (oldestKey !== undefined) this.cache.delete(oldestKey);
+    }
+    this.cache.set(window, {
+      expiresAt: Date.now() + StatsService.CACHE_TTL_MS,
+      value,
+    });
+    return value;
+  }
+
+  /** Call after a write that changes the public statistics aggregates. */
+  invalidateCache(): void {
+    this.cache.clear();
+  }
+
+  private async buildStats(query: StatsQueryDto) {
     const [
       waitlistMember,
       walletsConnected,
@@ -47,7 +78,6 @@ export class StatsService {
       monthsSinceStart
     ).toFixed(2);
 
-    const window = query.window || '7d';
     const now = new Date();
     now.setUTCHours(23, 59, 59, 999);
 
@@ -72,7 +102,9 @@ export class StatsService {
         dataIdx < dailyCounts.length &&
         dailyCounts[dataIdx].date === dateStr
       ) {
-        runningTotal += Number(dailyCounts[dataIdx].count);
+        const count = Number(dailyCounts[dataIdx].count);
+        // Suppress small daily groups to reduce re-identification risk.
+        if (count >= StatsService.MIN_PUBLIC_COHORT) runningTotal += count;
         dataIdx++;
       }
 
